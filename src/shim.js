@@ -25,6 +25,12 @@ const SERVER_ARGS = process.argv.slice(2);
 const VIRTUAL_PREFIX = 'roslyn-source-generated://';
 const SHIM_ID_PREFIX = 'roslyn-shim:';
 const LOG_PATH = process.env.ROSLYN_SHIM_LOG || null;
+const AUTOLOAD_DISABLED = process.env.ROSLYN_SHIM_NO_AUTOLOAD === '1';
+// Cap workspace traversal so the shim doesn't spin scanning a giant
+// monorepo. Five levels is plenty for the typical layouts (root/src/
+// company/feature/Project.csproj).
+const AUTOLOAD_DEPTH = parseInt(process.env.ROSLYN_SHIM_AUTOLOAD_DEPTH || '5', 10);
+const AUTOLOAD_SKIP_DIRS = new Set(['node_modules', 'bin', 'obj', '.git', '.vs', '.idea']);
 
 // Use a per-instance temp directory so concurrent shim processes can't
 // step on each other's files (cleanup deletes the whole directory on
@@ -229,6 +235,90 @@ function injectTextDocumentContentCapability(initMsg) {
   return cloned;
 }
 
+let workspaceFolderPaths = [];
+
+function uriToFsPath(uri) {
+  if (typeof uri !== 'string') return null;
+  if (uri.startsWith('file://')) return uri.slice('file://'.length);
+  return null;
+}
+
+function captureWorkspaceFolders(initMsg) {
+  const folders = new Set();
+  const params = initMsg && initMsg.params;
+  if (!params) return [];
+  if (typeof params.rootUri === 'string') {
+    const p = uriToFsPath(params.rootUri);
+    if (p) folders.add(p);
+  }
+  if (typeof params.rootPath === 'string') folders.add(params.rootPath);
+  if (Array.isArray(params.workspaceFolders)) {
+    for (const f of params.workspaceFolders) {
+      const p = uriToFsPath(f && f.uri);
+      if (p) folders.add(p);
+    }
+  }
+  return Array.from(folders);
+}
+
+function discoverProjectsSync(folders) {
+  const solutions = [];
+  const projects = [];
+  function walk(dir, depthRemaining) {
+    if (depthRemaining < 0) return;
+    let entries;
+    try { entries = fs.readdirSync(dir, { withFileTypes: true }); }
+    catch (_) { return; }
+    for (const entry of entries) {
+      if (entry.name.startsWith('.') && entry.name !== '.config') continue;
+      if (entry.isDirectory()) {
+        if (AUTOLOAD_SKIP_DIRS.has(entry.name)) continue;
+        walk(path.join(dir, entry.name), depthRemaining - 1);
+      } else if (entry.isFile()) {
+        const ext = path.extname(entry.name).toLowerCase();
+        const full = path.join(dir, entry.name);
+        if (ext === '.sln' || ext === '.slnx' || ext === '.slnf') solutions.push(full);
+        else if (ext === '.csproj' || ext === '.vbproj' || ext === '.fsproj') projects.push(full);
+      }
+    }
+  }
+  for (const folder of folders) walk(folder, AUTOLOAD_DEPTH);
+  return { solutions, projects };
+}
+
+let autoloadFired = false;
+function autoloadProjects() {
+  if (autoloadFired || AUTOLOAD_DISABLED) return;
+  autoloadFired = true;
+  if (workspaceFolderPaths.length === 0) {
+    log('autoload: no workspace folders captured; skipping');
+    return;
+  }
+  const { solutions, projects } = discoverProjectsSync(workspaceFolderPaths);
+  if (solutions.length > 0) {
+    // Prefer the topmost (shortest path) solution to minimise scope.
+    solutions.sort((a, b) => a.length - b.length);
+    const sln = solutions[0];
+    log('autoload: opening solution', sln);
+    sendToServer({
+      jsonrpc: '2.0',
+      method: 'solution/open',
+      params: { solution: 'file://' + sln },
+    });
+    return;
+  }
+  if (projects.length > 0) {
+    log('autoload: opening projects', projects.length);
+    sendToServer({
+      jsonrpc: '2.0',
+      method: 'project/open',
+      params: { projects: projects.map((p) => 'file://' + p) },
+    });
+    return;
+  }
+  log('autoload: no .sln/.csproj found under', workspaceFolderPaths.join(', '));
+}
+
 function handleClientMessage(msg) {
   if (msg.method === 'textDocument/didOpen'
       || msg.method === 'textDocument/didChange'
@@ -242,10 +332,27 @@ function handleClientMessage(msg) {
   }
   let outbound = msg;
   if (msg.method === 'initialize') {
+    workspaceFolderPaths = captureWorkspaceFolders(msg);
+    if (workspaceFolderPaths.length > 0) {
+      log('captured workspace folders:', workspaceFolderPaths.join(', '));
+    }
     outbound = injectTextDocumentContentCapability(msg);
   }
   const rewritten = mapStringsDeep(outbound, fileToVirtualMapper);
   sendToServer(rewritten);
+
+  // The Roslyn LSP only analyses projects that have been explicitly opened
+  // via solution/open or project/open. Many clients (Claude Code's LSP
+  // tool, OpenCode, etc.) don't send those, which leaves cross-project
+  // navigation broken — the server falls back to MetadataAsSource
+  // decompilation of the referenced .dll, which doesn't include source
+  // generator output. After the parent client signals `initialized`, the
+  // shim discovers .sln/.csproj files under the workspace folders and
+  // sends `solution/open` (or a `project/open` listing every csproj).
+  // Idempotent if the client also opens projects itself.
+  if (msg.method === 'initialized') {
+    try { autoloadProjects(); } catch (e) { log('autoload threw', e.message); }
+  }
 }
 
 let serverQueue = Promise.resolve();

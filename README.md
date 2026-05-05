@@ -138,6 +138,14 @@ In detail:
 
 The shim also injects `workspace.textDocumentContent` into the client's `initialize` capabilities so the server is willing to use the virtual URI scheme in the first place.
 
+### Project auto-discovery
+
+The Roslyn LSP only analyses projects that have been explicitly opened via `solution/open` or `project/open`. Many LSP clients (Claude Code's LSP tool, OpenCode) don't send those notifications, which leaves cross-project navigation broken — the server falls back to `MetadataAsSource` decompilation of the referenced `.dll`, which **does not include source-generator output**. Symptom: go-to-definition on a type that lives in a referenced project's source generator returns nothing, or jumps to a stub that's missing the generated members.
+
+To fix this, when the parent client signals `initialized`, the shim walks the workspace folders captured from `initialize` (`rootUri` / `workspaceFolders`) and discovers `.sln`/`.slnx`/`.slnf` or, failing that, every `.csproj`/`.vbproj`/`.fsproj`. It then sends `solution/open` (preferred) or a `project/open` listing every project so Roslyn loads the full graph. Idempotent if the client also opens projects itself.
+
+Traversal skips `node_modules`, `bin`, `obj`, `.git`, `.vs`, `.idea`, and is depth-capped (default 5). Tune with the env vars below if you need to.
+
 ## Limitations
 
 - **Read-only.** The temp files exist solely as a navigation target. The shim drops `didOpen`/`didChange`/`didClose` notifications on those paths because the Roslyn server does not accept document lifecycle events for source-generated documents.
@@ -151,6 +159,8 @@ The shim also injects `workspace.textDocumentContent` into the client's `initial
 |---|---|
 | `ROSLYN_LSP_CMD` | Override the wrapped server binary (default `roslyn-language-server`). Useful when the binary is at a non-standard path. |
 | `ROSLYN_SHIM_LOG` | If set, append shim debug logs to this file. Unset for silent operation. |
+| `ROSLYN_SHIM_NO_AUTOLOAD` | Set to `1` to disable the project auto-discovery step. Use this if your client already opens projects/solutions itself and you want full control. |
+| `ROSLYN_SHIM_AUTOLOAD_DEPTH` | Max directory depth when scanning for `.sln`/`.csproj` (default `5`). |
 
 ## Try it locally
 
@@ -158,13 +168,17 @@ The shim also injects `workspace.textDocumentContent` into the client's `initial
 git clone https://github.com/jhested/roslyn-lsp-shim
 cd roslyn-lsp-shim
 npm test                  # fast: unit + initialize round-trip with the real LSP
-npm run test:e2e          # slower: builds examples/sample-project, opens it in the
-                          # shim+LSP, asks for the implementation of EmailRegex(),
-                          # verifies the response navigates into a temp file
-                          # containing the generated regex source.
+npm run test:e2e          # slower: builds the example projects under examples/,
+                          # opens them via the shim, navigates into source-
+                          # generated code, verifies content of temp files.
 ```
 
-`examples/sample-project/` is a minimal `[GeneratedRegex]` consumer that deliberately does **not** set `EmitCompilerGeneratedFiles`, so it exercises the actual problem the shim solves.
+Two example workspaces:
+
+- **`examples/sample-project/`** — minimal single-project `[GeneratedRegex]` consumer. Verifies in-project go-to-implementation through the shim.
+- **`examples/multi-project/`** — three-project graph (`Generator` → `Producer` → `Consumer`) where the source generator runs in `Producer` but is consumed from `Consumer`. Verifies cross-project go-to-definition into source-generator output. Reproduces the failure mode where, without auto-load, the LSP falls back to `MetadataAsSource` decompilation and navigation breaks.
+
+Both deliberately do **not** set `EmitCompilerGeneratedFiles`, so they exercise the actual problem the shim solves.
 
 ## Development
 

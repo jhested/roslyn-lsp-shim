@@ -37,6 +37,6 @@
     "test": "node test/uri-rewrite.js && node test/smoke-initialize.js",
     "test:unit": "node test/uri-rewrite.js",
     "test:smoke": "node test/smoke-initialize.js",
-    "test:e2e": "node test/e2e-generated-regex.js"
+    "test:e2e": "node test/e2e-generated-regex.js && node test/e2e-multi-project.js"
   }
 }

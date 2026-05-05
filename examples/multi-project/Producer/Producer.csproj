@@ -1,0 +1,18 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <!-- DELIBERATELY not setting EmitCompilerGeneratedFiles. The generated
+         interface/record exist only in Roslyn's in-memory compilation; the
+         shim is the thing that has to make them navigable. -->
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\Generator\Generator.csproj"
+                      OutputItemType="Analyzer"
+                      ReferenceOutputAssembly="false" />
+  </ItemGroup>
+
+</Project>
