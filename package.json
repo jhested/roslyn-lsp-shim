@@ -1,0 +1,42 @@
+{
+  "name": "roslyn-lsp-shim",
+  "version": "0.1.0",
+  "description": "stdio LSP proxy that adds source-generated document navigation to roslyn-language-server for clients that don't implement the Roslyn-specific custom protocol (Claude Code, OpenCode, Helix, Zed, etc.).",
+  "keywords": [
+    "lsp",
+    "language-server",
+    "roslyn",
+    "csharp",
+    "dotnet",
+    "source-generators",
+    "claude-code",
+    "opencode"
+  ],
+  "homepage": "https://github.com/jhested/roslyn-lsp-shim#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/jhested/roslyn-lsp-shim.git"
+  },
+  "bugs": {
+    "url": "https://github.com/jhested/roslyn-lsp-shim/issues"
+  },
+  "author": "jhested",
+  "license": "MIT",
+  "bin": {
+    "roslyn-lsp-shim": "src/shim.js"
+  },
+  "files": [
+    "src/",
+    "README.md",
+    "LICENSE"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
+  "scripts": {
+    "test": "node test/uri-rewrite.js && node test/smoke-initialize.js",
+    "test:unit": "node test/uri-rewrite.js",
+    "test:smoke": "node test/smoke-initialize.js",
+    "test:e2e": "node test/e2e-generated-regex.js"
+  }
+}

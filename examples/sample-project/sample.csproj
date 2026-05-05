@@ -1,0 +1,16 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <!--
+      Deliberately NOT setting EmitCompilerGeneratedFiles. The whole point
+      of the shim is to make navigation work for source-generated code
+      WITHOUT writing it to disk. If this property were set to true, the
+      Roslyn LSP would emit generated files under obj/Generated and the
+      shim's URI translation would never fire.
+    -->
+  </PropertyGroup>
+
+</Project>
